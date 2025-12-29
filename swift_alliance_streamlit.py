@@ -35,6 +35,7 @@ from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
+import xml.etree.ElementTree as ET
 
 # Optional libs
 try:
@@ -275,12 +276,6 @@ def download_logo_from_url(url: str) -> Optional[str]:
 
 def show_dos_boot(screen_text: List[str], delay: float = 0.08):
     """Render a DOS-like startup sequence in Streamlit with delay (blocking)."""
-    box = st.empty()
-    # monospace block
-    for line in screen_text:
-        current = box.text_area("SYSTEM", value=line, height=200, key=str(uuid.uuid4()))
-        time.sleep(delay)
-    # For a nicer effect, show sequence in a single area
     disp = st.empty()
     out = ""
     for line in screen_text:
@@ -362,32 +357,42 @@ def generate_pdf_bytes(formal_text: str, logo_path: Optional[str]=None) -> bytes
 st.set_page_config(page_title="Swift Alliance - Converter & PDF Export", layout="wide")
 st.title("Swift Alliance — SWIFT Message Composer (with PDF/TXT export)")
 
-# Login screen
+# --- Login screen (fixed: persist username in session_state) ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
+if "username" not in st.session_state:
+    st.session_state["username"] = ""
+
 if not st.session_state["logged_in"]:
     st.subheader("Login")
-    uname = st.text_input("Username")
-    pwd = st.text_input("Password", type="password")
+    input_uname = st.text_input("Username")
+    input_pwd = st.text_input("Password", type="password")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("Login"):
-            if validate_user(uname, pwd):
+            if validate_user(input_uname, input_pwd):
+                st.session_state["username"] = input_uname
                 st.session_state["logged_in"] = True
+                st.success("Login successful")
                 st.experimental_rerun()
             else:
                 st.error("Invalid credentials")
     with col2:
         if st.button("Register (create new user)"):
-            if not uname or not pwd:
+            if not input_uname or not input_pwd:
                 st.error("Enter username and password")
             else:
-                add_user(uname, pwd)
-                st.success("User created — you can now Login")
+                add_user(input_uname, input_pwd)
+                st.session_state["username"] = input_uname
+                st.session_state["logged_in"] = True
+                st.success("User created and logged in")
+                st.experimental_rerun()
     st.stop()
 
-# Logged-in UI
+# After login (use session_state username safely)
+uname = st.session_state.get("username", "")
 st.sidebar.markdown(f"Logged in as: **{uname}**")
+
 create_demo_customer_and_accounts()
 # Select account number (from BANK)
 acct_options = [a["account_number"] for a in BANK.get("accounts", [])]
@@ -547,21 +552,18 @@ if compose_btn:
     st.subheader("Formal Output Preview")
     st.code(formal_text, language="text")
 
+    # Persist preview and formal text so downloads work
+    st.session_state["preview"] = formal_text
+    st.session_state["formal_text"] = formal_text
+
 # Download PDF
 if download_pdf_btn:
-    if not st.session_state.get("preview"):
+    if not st.session_state.get("formal_text") and not st.session_state.get("preview"):
         st.info("Generate/compose the message first (press Compose & Preview).")
     else:
-        # use current preview or last formal_text
-        content = st.session_state.get("preview")
-        # if Compose hasn't been pressed but we have formal_text shown, prefer that
-        if "formal_text" in locals():
-            formal_text_to_export = formal_text
-        else:
-            formal_text_to_export = st.session_state.get("preview") or ""
+        formal_text_to_export = st.session_state.get("formal_text") or st.session_state.get("preview")
         # ensure end timestamp
         st.session_state["message_end_ts"] = datetime.datetime.utcnow().isoformat()
-        # generate pdf bytes
         try:
             pdf_bytes = generate_pdf_bytes(formal_text_to_export, logo_path)
             st.download_button("Download PDF", data=pdf_bytes, file_name=f"swift_message_{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf", mime="application/pdf")
@@ -571,13 +573,10 @@ if download_pdf_btn:
 
 # Download TXT
 if download_txt_btn:
-    if not st.session_state.get("preview"):
+    if not st.session_state.get("formal_text") and not st.session_state.get("preview"):
         st.info("Generate/compose the message first (press Compose & Preview).")
     else:
-        if "formal_text" in locals():
-            txt = formal_text
-        else:
-            txt = st.session_state.get("preview") or ""
+        txt = st.session_state.get("formal_text") or st.session_state.get("preview") or ""
         st.session_state["message_end_ts"] = datetime.datetime.utcnow().isoformat()
         st.download_button("Download TXT", data=txt.encode("utf-8"), file_name=f"swift_message_{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.txt", mime="text/plain")
         st.success("TXT prepared for download.")
