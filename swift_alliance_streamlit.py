@@ -1,24 +1,19 @@
 """
-Swift Alliance — Single-file Streamlit app with login, multiple MT templates,
-logo support, PDF/TXT export, DOS-like startup, timestamps, and formal output format.
+Swift Alliance — Single-file Streamlit app (final corrected version)
 
-How to use
-1. Install dependencies:
-   pip install streamlit xmlschema lxml reportlab requests
+Includes:
+ - robust login (session_state username persisted)
+ - safe st.experimental_rerun() handling
+ - MT templates (MT103, MT199, MT700, MT760, MT799)
+ - logo download and embed in PDF
+ - PDF/TXT export (reportlab required for PDF)
+ - DOS-like boot screen and timestamps
+ - formal output format saved to session_state for downloads
 
-   - reportlab is used for PDF generation.
-   - requests is used to download the logo image from the provided URL.
-
-2. Run:
-   streamlit run swift_alliance_streamlit.py
-
-Notes / Warnings
-- The app can download the logo image from a URL you provide and embed it in PDFs.
-  Make sure you have the right to use the logo you provide.
-- For production SWIFT messaging, integrate with a certified gateway. This app is
-  for message creation, preview, validation and local export only.
+Usage:
+  pip install streamlit xmlschema lxml reportlab requests
+  streamlit run swift_alliance_streamlit.py
 """
-
 import os
 import io
 import json
@@ -164,29 +159,13 @@ SWIFT_SENDER_INFO_DEFAULT = {
 }
 
 MT_TEMPLATES = {
-    "MT103": {
-        "required_tags": [":20:", ":32A:", ":50K:", ":59:", ":71A:"],
-        "example": "Classic single-customer credit transfer (MT103)."
-    },
-    "MT199": {
-        "required_tags": [":20:", ":21:", ":79:"],
-        "example": "Free-format message (MT199)."
-    },
-    "MT700": {
-        "required_tags": [":20:", ":40A:", ":31D:", ":50:", ":59:", ":44A:", ":77B:"],
-        "example": "Issue of a documentary credit (MT700)."
-    },
-    "MT760": {
-        "required_tags": [":20:", ":21:", ":32B:", ":50:", ":59:", ":77U:"],
-        "example": "Guarantee or standby (MT760)."
-    },
-    "MT799": {
-        "required_tags": [":20:", ":21:", ":79:"],
-        "example": "Free-format pre-advice or reservation (MT799)."
-    }
+    "MT103": {"required_tags": [":20:", ":32A:", ":50K:", ":59:", ":71A:"], "example": "Classic single-customer credit transfer (MT103)."},
+    "MT199": {"required_tags": [":20:", ":21:", ":79:"], "example": "Free-format message (MT199)."},
+    "MT700": {"required_tags": [":20:", ":40A:", ":31D:", ":50:", ":59:", ":44A:", ":77B:"], "example": "Issue of a documentary credit (MT700)."},
+    "MT760": {"required_tags": [":20:", ":21:", ":32B:", ":50:", ":59:", ":77U:"], "example": "Guarantee or standby (MT760)."},
+    "MT799": {"required_tags": [":20:", ":21:", ":79:"], "example": "Free-format pre-advice or reservation (MT799)."}
 }
 
-# Helper to build MT body from fields
 def build_mt_message(msg_type: str, fields: Dict[str, str], sender_info: Dict[str,str], reference: Optional[str]=None) -> str:
     ref = reference or (msg_type[:3] + datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S"))
     lines = []
@@ -262,7 +241,7 @@ def download_logo_from_url(url: str) -> Optional[str]:
             ext = ".svg"
         elif "png" in content_type or url.lower().endswith(".png"):
             ext = ".png"
-        elif "jpeg" in content_type or url.lower().endswith(".jpg") or url.lower().endswith(".jpeg"):
+        elif "jpeg" in content_type or "jpg" in content_type or url.lower().endswith(".jpg") or url.lower().endswith(".jpeg"):
             ext = ".jpg"
         fname = os.path.join(ASSETS_DIR, "swift_logo" + ext)
         with open(fname, "wb") as f:
@@ -357,7 +336,7 @@ def generate_pdf_bytes(formal_text: str, logo_path: Optional[str]=None) -> bytes
 st.set_page_config(page_title="Swift Alliance - Converter & PDF Export", layout="wide")
 st.title("Swift Alliance — SWIFT Message Composer (with PDF/TXT export)")
 
-# --- Login screen (fixed: persist username in session_state) ---
+# --- Login screen (robust: persist username in session_state; safe rerun) ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
 if "username" not in st.session_state:
@@ -371,10 +350,15 @@ if not st.session_state["logged_in"]:
     with col1:
         if st.button("Login"):
             if validate_user(input_uname, input_pwd):
+                # persist username and logged-in state
                 st.session_state["username"] = input_uname
                 st.session_state["logged_in"] = True
                 st.success("Login successful")
-                st.experimental_rerun()
+                try:
+                    if hasattr(st, "experimental_rerun"):
+                        st.experimental_rerun()
+                except Exception as _ex:
+                    logger.exception("st.experimental_rerun() failed: %s", _ex)
             else:
                 st.error("Invalid credentials")
     with col2:
@@ -386,7 +370,11 @@ if not st.session_state["logged_in"]:
                 st.session_state["username"] = input_uname
                 st.session_state["logged_in"] = True
                 st.success("User created and logged in")
-                st.experimental_rerun()
+                try:
+                    if hasattr(st, "experimental_rerun"):
+                        st.experimental_rerun()
+                except Exception as _ex:
+                    logger.exception("st.experimental_rerun() failed after register: %s", _ex)
     st.stop()
 
 # After login (use session_state username safely)
@@ -447,9 +435,6 @@ for line in mt_fields_raw.splitlines():
     if line.startswith(":") and ":" in line[1:]:
         tag, val = line.split(":", 1)
         mt_fields[tag+":" ] = val.strip()
-    else:
-        # fallback map
-        pass
 
 # Start / end timestamps
 if "message_start_ts" not in st.session_state:
@@ -465,7 +450,6 @@ download_txt_btn = col_b.button("Download TXT")
 
 # Show DOS-like boot when Start pressed
 if start_btn:
-    # Minimal DOS lines
     dos_lines = [
         "Microsoft(R) Windows DOS Simulator v1.0",
         "Copyright (c) SWIFT Alliance Simulator",
@@ -481,17 +465,14 @@ if start_btn:
 
 # Compose message and show preview
 if compose_btn:
-    # mark start if not set
     if not st.session_state.get("message_start_ts"):
         st.session_state["message_start_ts"] = datetime.datetime.utcnow().isoformat()
-    # Validate amount
     try:
         amount = Decimal(amount_text.strip())
     except Exception:
         st.error("Invalid amount. Use numeric format e.g., 1234.56")
         st.stop()
 
-    # Build message body
     sender_info = {
         "bic": sender_bic,
         "bank_name": sender_bank,
@@ -506,17 +487,14 @@ if compose_btn:
             ":59:": f"{beneficiary_name} /{beneficiary_account}",
             ":70:": remittance
         }
-        # merge user mt_fields, override defaults
         fields_map.update(mt_fields)
         mt_body = build_mt_message("103", {k: v for k, v in fields_map.items()}, sender_info, reference)
         message_body = mt_body
-    elif msg_type == "MT199" or msg_type == "MT799":
-        # free text
+    elif msg_type in ("MT199", "MT799"):
         fields_map = mt_fields or {":79:": remittance}
         mt_body = build_mt_message(msg_type.replace("MT",""), fields_map, sender_info, reference)
         message_body = mt_body
     elif msg_type == "MT700":
-        # simplified MT700 style using user-provided tags
         fields_map = mt_fields or {":77B:": remittance}
         mt_body = build_mt_message("700", fields_map, sender_info, reference)
         message_body = mt_body
@@ -525,7 +503,6 @@ if compose_btn:
         mt_body = build_mt_message("760", fields_map, sender_info, reference)
         message_body = mt_body
     else:
-        # ISO20022 option if selected via a different workflow; default to pain.001
         payment = {
             "ordering_account": ordering_account,
             "ordering_name": ordering_name,
@@ -544,10 +521,7 @@ if compose_btn:
             st.error(f"Failed to build pain.001 XML: {e}")
             st.stop()
 
-    # mark end timestamp now for export
     st.session_state["message_end_ts"] = datetime.datetime.utcnow().isoformat()
-
-    # Formal output
     formal_text = build_formal_output(msg_type, message_body, sender_info, st.session_state["message_start_ts"], st.session_state["message_end_ts"], selected_account or "")
     st.subheader("Formal Output Preview")
     st.code(formal_text, language="text")
@@ -562,10 +536,9 @@ if download_pdf_btn:
         st.info("Generate/compose the message first (press Compose & Preview).")
     else:
         formal_text_to_export = st.session_state.get("formal_text") or st.session_state.get("preview")
-        # ensure end timestamp
         st.session_state["message_end_ts"] = datetime.datetime.utcnow().isoformat()
         try:
-            pdf_bytes = generate_pdf_bytes(formal_text_to_export, logo_path)
+            pdf_bytes = generate_pdf_bytes(formal_text_to_export, st.session_state.get("logo_path"))
             st.download_button("Download PDF", data=pdf_bytes, file_name=f"swift_message_{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.pdf", mime="application/pdf")
             st.success("PDF generated (download button above).")
         except Exception as e:
@@ -581,7 +554,7 @@ if download_txt_btn:
         st.download_button("Download TXT", data=txt.encode("utf-8"), file_name=f"swift_message_{datetime.datetime.utcnow().strftime('%Y%m%d%H%M%S')}.txt", mime="text/plain")
         st.success("TXT prepared for download.")
 
-# Also provide Save buttons after compose
+# Show last operations
 if st.session_state.get("preview"):
     st.markdown("---")
     st.write("Last operations:")
